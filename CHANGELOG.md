@@ -1,3 +1,11 @@
+ - Replaced instance_of because a constant may not have been defined
+ - Renamed message to raw_message to prevent overlap between the config and the source field
+ - Updated the Apache license in gemspec
+ - Set tcp so_keepalive
+ - Added sync_close on TLS connections and sysclose to recover from destination disconnects
+ - Swallow @client_socket.sysclose
+ - Changed sleep hack to sleep for reconnect_interval
+
 ## 3.0.5
   - Docs: Set the default_codec doc attribute.
 

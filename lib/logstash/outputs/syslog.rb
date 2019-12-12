@@ -108,7 +108,7 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
 
   # application name for syslog message. The new value can include `%{foo}` strings
   # to help you build a new value from other parts of the event.
-  config :appname, :validate => :string, :default => "LOGSTASH"
+  config :appname, :validate => :string, :default => "logstash"
 
   # process id for syslog message. The new value can include `%{foo}` strings
   # to help you build a new value from other parts of the event.
@@ -131,8 +131,10 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
     if ssl?
       @ssl_context = setup_ssl
     end
-    
-    if @codec.instance_of? LogStash::Codecs::Plain
+
+    # May not have have required this class, may not have constant defined
+    #if @codec.instance_of? LogStash::Codecs::Plain
+    if @codec.class.name.eql?("LogStash::Codecs::Plain")
       if @codec.config["format"].nil?
         @codec = LogStash::Codecs::Plain.new({"format" => @message})
       end
@@ -152,7 +154,7 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
     procid = event.sprintf(@procid)
     sourcehost = event.sprintf(@sourcehost)
 
-    message = payload.to_s.rstrip.gsub(/[\r][\n]/, "\n").gsub(/[\n]/, '\n')
+    raw_message = payload.to_s.rstrip.gsub(/[\r][\n]/, "\n").gsub(/[\n]/, '\n')
 
     # fallback to pri 13 (facility 1, severity 5)
     if @use_labels
@@ -166,11 +168,11 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
 
     if @is_rfc3164
       timestamp = event.sprintf("%{+MMM dd HH:mm:ss}")
-      syslog_msg = "<#{priority.to_s}>#{timestamp} #{sourcehost} #{appname}[#{procid}]: #{message}"
+      syslog_msg = "<#{priority.to_s}>#{timestamp} #{sourcehost} #{appname}[#{procid}]: #{raw_message}"
     else
       msgid = event.sprintf(@msgid)
       timestamp = event.sprintf("%{+YYYY-MM-dd'T'HH:mm:ss.SSSZZ}")
-      syslog_msg = "<#{priority.to_s}>1 #{timestamp} #{sourcehost} #{appname} #{procid} #{msgid} - #{message}"
+      syslog_msg = "<#{priority.to_s}>1 #{timestamp} #{sourcehost} #{appname} #{procid} #{msgid} - #{raw_message}"
     end
 
     begin
@@ -182,9 +184,12 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
       return if udp?
 
       @logger.warn("syslog " + @protocol + " output exception: closing, reconnecting and resending event", :host => @host, :port => @port, :exception => e, :backtrace => e.backtrace, :event => event)
+      if ssl?
+        @logger.error("tls error: #{syslog_msg}")
+        @client_socket.sysclose rescue nil
+      end
       @client_socket.close rescue nil
       @client_socket = nil
-
       sleep(@reconnect_interval)
       retry
     end
@@ -207,16 +212,16 @@ class LogStash::Outputs::Syslog < LogStash::Outputs::Base
       socket.connect(@host, @port)
     else
       socket = TCPSocket.new(@host, @port)
+      socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
       if ssl?
         socket = OpenSSL::SSL::SSLSocket.new(socket, @ssl_context)
         begin
+          socket.sync_close = true
           socket.connect
         rescue OpenSSL::SSL::SSLError => ssle
-          @logger.error("SSL Error", :exception => ssle,
-                        :backtrace => ssle.backtrace)
-          # NOTE(mrichar1): Hack to prevent hammering peer
-          sleep(5)
-          raise
+          @logger.error("SSL Error", :exception => ssle, :backtrace => ssle.backtrace)
+          sleep(@reconnect_interval)
+	  raise
         end
       end
     end
